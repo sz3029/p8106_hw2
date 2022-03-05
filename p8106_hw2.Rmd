@@ -145,6 +145,8 @@ The deviance explained by the model is 83.7%, and the adjusted R-squared is 0.81
 
 Plot results:
 
+The plots of each predictor v.s. the response (Outstate) shown below:
+
 ```{r plot}
 plot(gam.full)
 ```
@@ -168,29 +170,47 @@ Train a multivariate adaptive regression spline (MARS) model using all the predi
 ```{r mars}
 ctrl1 <- trainControl(method = "cv", number = 10)
 mars_grid <- expand.grid(degree = 1:3, 
-                         nprune = 4:20)
+                         nprune = 6:20)
 
 set.seed(2)
 mars.fit <- train(x, y,
                   method = "earth",
                   tuneGrid = mars_grid,
                   trControl = ctrl1)
-
+## Plot of grid tunning
 ggplot(mars.fit)
 ```
 
-```{r}
-mars.fit$bestTune
+The final model is:
 
-coef(mars.fit$finalModel) 
+```{r coeff}
+mars.fit$bestTune
+## Coefficient of the MARS model
+coef(mars.fit$finalModel)
 ```
 
-The optimal model with minimum prediction error has 17 retained terms, and 1 degree of interaction.  
+The optimal model with minimum prediction error has 17 retained terms, and 1 degree of interaction. 
 
 ### Produce the PDP plots
 
+PDP of Room.Board predictor
+```{r pdp}
+pdp::partial(mars.fit, pred.var = c("Room.Board"), grid.resolution = 10) %>% autoplot()
+```
 
+### Test Error
 
+```{r te.pdp}
+mars.pred  <- predict(mars.fit, newdata = college[-rowTrain,])
+## Test Error (MSE)
+t.mse <- mean((college[-rowTrain,]$Outstate - mars.pred)^2);t.mse
+```
+
+The test error (MSE) of the MARS model is 2774623.
+
+## (e) Model Comparision
+
+According to (c) and (d), we found that the test error of GAM model is 3012372, and the test error of MARS model is 2774623. For data prediction, we want to choose the model with the smaller test error, so we choose MARS model for out-of-state prediction. 
 
 
 
