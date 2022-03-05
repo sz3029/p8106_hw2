@@ -1,0 +1,202 @@
+---
+title: "P8106 HW2" 
+author: "Shihui Zhu"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 2
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+header-includes:
+- \usepackage{fancyhdr}
+- \usepackage{lipsum}
+- \pagestyle{fancy}
+- \fancyhead[R]{\thepage}
+- \fancypagestyle{plain}{\pagestyle{fancy}}
+--- 
+
+\newpage
+
+```{r setup, include=FALSE}
+# This chunk loads all the packages used in this homework
+library(caret) 
+library(splines)
+library(mgcv)
+library(pdp)
+library(earth)
+library(ggplot2)
+library(lasso2) # only for data
+library(tidyverse)
+
+# General figure set up
+knitr::opts_chunk$set(
+  # hide warning messages
+  warning = FALSE
+)
+```
+
+# College Dataset
+## (a) EDA
+
+Load data set from "College.csv"
+```{r input_train, message=FALSE}
+college <- read_csv("College.csv")[-1] #remove college names
+```
+
+Partition the dataset into two parts: training data (80%) and test data (20%)
+```{r split}
+set.seed(1)
+rowTrain <- createDataPartition(y = college$Outstate, p = 0.8, list = FALSE)
+```
+   
+Perform exploratory data analysis using the training data:
+```{r EDA, message=FALSE, fig.width = 10, fig.height = 10, out.width="90%"}
+train.set <- college[rowTrain,]
+
+x <- train.set %>%
+  select(-Outstate)
+y <- train.set$Outstate
+
+theme1 <- trellis.par.get()
+theme1$plot.symbol$col <- rgb(.2, .4, .2, .5)
+theme1$plot.symbol$pch <- 16
+theme1$plot.line$col <- rgb(.8, .1, .1, 1)
+theme1$plot.line$lwd <- 2
+theme1$strip.background$col <- rgb(.0, .2, .6, .2)
+trellis.par.set(theme1)
+
+# Scatter plots
+featurePlot(x, y, plot = "scatter", labels = c("","Out-of-state Tuition"),
+            type = c("p"), layout = c(4, 4))
+```
+
+From the scatter plots above we see that most of the predictors are not linearly associated with response variable (Outstate). For example, data points from plots of $Accept$, $Enroll$, $F.Undergrad$, $P.Undergrad$, $Personal$ are clustered in the left side of the plot. This suggests that we may need to use nonlinear model to model our data.
+
+## (b) Smoothing Spline Models
+
+Fit smoothing spline models using Terminal as the only predictor of Outstate for a range of degrees of freedom, as well as the degree of freedom obtained by generalized cross-validation, and plot the resulting fits. Describe the results obtained.
+
+### For a range of degrees of freedom
+
+$df$ ranges from $(1,nx]$, nx the number of unique x values, in this case, number of unique Terminal values
+
+```{r ss_df}
+Terminal.grid <- seq(from = min(unique(train.set$Terminal))-10, max(unique(train.set$Terminal))+10, by = 1)
+
+fit.ss <- smooth.spline(train.set$Terminal, train.set$Outstate, lambda = 0.03, cv = FALSE, df = seq(from = 1.2, to = length(unique(train.set$Terminal)), by = 0.2))
+fit.ss$df
+
+pred.ss <- predict(fit.ss,
+                   x = Terminal.grid)
+
+pred.ss.df <- data.frame(pred = pred.ss$y,
+                         terminnal = Terminal.grid)
+
+p <- ggplot(data = train.set, aes(x = Terminal, y = Outstate)) +
+     geom_point(color = rgb(.2, .4, .2, .5))
+
+p +
+geom_line(aes(x = Terminal.grid, y = pred), data = pred.ss.df,
+          color = rgb(.8, .1, .1, 1)) + theme_bw()
+```
+
+The smoothing spline model fitted using a range of degrees of freedom is 4.10501 with $\lambda=0.03$.
+
+Now we can use cross-validation to select the degrees of freedom:
+
+```{r ss_cv}
+# Use CV
+fit.ss.cv <- smooth.spline(train.set$Terminal, train.set$Outstate, cv = TRUE)
+fit.ss.cv$df
+fit.ss.cv$lambda
+
+pred.ss.cv <- predict(fit.ss.cv,
+                   x = Terminal.grid)
+
+pred.ss.df.cv <- data.frame(pred = pred.ss.cv$y,
+                         terminnal = Terminal.grid)
+
+p +
+geom_line(aes(x = Terminal.grid, y = pred), data = pred.ss.df.cv,
+          color = rgb(.8, .1, .1, 1)) + theme_bw()
+```
+The smoothing spline model fitted using CV has degrees of freedom is 4.892078 with $\lambda=0.0210592$.
+
+## (c) GAM
+
+### Fit GAM using all predictors
+
+```{r gam}
+gam.full <- gam(Outstate ~ s(Apps)+s(Accept)+s(Enroll)+s(Top10perc)+s(Top25perc)+s(F.Undergrad)+s(P.Undergrad)+
+                  s(Room.Board)+s(Books)+s(Personal)+s(PhD)+s(Terminal)+s(S.F.Ratio)+
+                  s(perc.alumni)+s(Expend)+s(Grad.Rate), data = train.set)
+summary(gam.full)
+gam.full$df.residual
+# Training RMSE
+sqrt(mean(residuals.gam(gam.full,type="response")^2))
+```
+
+The total degrees of freedom of the GAM model is 405.2527. The p-value of some of the predictors show that the predictor might not be significant: Top25perc, F.Undergrad, P.Undergrad, Books, PhD,
+and Terminal. Also, among the significant predictors, some of the them are likely to have linear relationship with the model: Enroll, Top10perc, and Personal. 
+
+The deviance explained by the model is 83.7%, and the adjusted R-squared is 0.819, which means the model explains the data well. The RMSE os the model is 1503.405. 
+
+Plot results:
+
+```{r plot}
+plot(gam.full)
+```
+
+### Test Error
+
+```{r te}
+gam.pred  <- predict(gam.full, newdata = college[-rowTrain,])
+## Test Error (MSE)
+t.mse <- mean((college[-rowTrain,]$Outstate - gam.pred)^2);t.mse
+```
+
+The test error (MSE) of the GAM model is 3012372. 
+
+## (d) MARS
+
+Train a multivariate adaptive regression spline (MARS) model using all the predictors. Report the final model. Present the partial dependence plot of an arbitrary predictor in your final model. Report the test error.
+
+### Build the MARS model
+
+```{r mars}
+ctrl1 <- trainControl(method = "cv", number = 10)
+mars_grid <- expand.grid(degree = 1:3, 
+                         nprune = 4:20)
+
+set.seed(2)
+mars.fit <- train(x, y,
+                  method = "earth",
+                  tuneGrid = mars_grid,
+                  trControl = ctrl1)
+
+ggplot(mars.fit)
+```
+
+```{r}
+mars.fit$bestTune
+
+coef(mars.fit$finalModel) 
+```
+
+The optimal model with minimum prediction error has 17 retained terms, and 1 degree of interaction.  
+
+### Produce the PDP plots
+
+
+
+
+
+
+
+
+
+
+
+
